@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SyncSpace | Team Collaboration Platform</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    body { max-width: 100vw; overflow-x: hidden; font-family: system-ui, sans-serif; }
+  </style>
+</head>
+<body class="h-full bg-slate-950 text-slate-100">
+  <div id="root" class="min-h-full flex flex-col"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [tasks, setTasks] = useState([]);
+      const [activeChannel, setActiveChannel] = useState("engineering");
+      const [messages, setMessages] = useState([]);
+      const [ws, setWs] = useState(null);
+      const [newTaskTitle, setNewTaskTitle] = useState("");
+
+      useEffect(() => {
+        fetch('http://localhost:8000/api/v1/tasks')
+          .then(res => res.json())
+          .then(data => setTasks(data))
+          .catch(err => console.error(err));
+      }, []);
+
+      useEffect(() => {
+        const socket = new WebSocket(`ws://localhost:8000/api/v1/ws/chat/${activeChannel}`);
+        socket.onmessage = (event) => {
+          setMessages(prev => [...prev, JSON.parse(event.data)]);
+        };
+        setWs(socket);
+        return () => socket.close();
+      }, [activeChannel]);
+
+      const handleCreateTask = async (e) => {
+        e.preventDefault();
+        const res = await fetch('http://localhost:8000/api/v1/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: newTaskTitle,
+            assignee: "You",
+            status: "Backlog",
+            priority: "Medium",
+            project: "Core",
+            due_date: "2026-12-31"
+          })
+        });
+        if (res.ok) {
+          const newTask = await res.json();
+          setTasks([...tasks, newTask]);
+          setNewTaskTitle("");
+        }
+      };
+
+      const handleSendMessage = (e) => {
+        e.preventDefault();
+        const input = e.target.elements.msg.value;
+        if (ws && input) {
+          ws.send(JSON.stringify({ text: input, sender: "You", time: new Date().toLocaleTimeString() }));
+          e.target.reset();
+        }
+      };
+
+      return (
+        <div className="p-8 max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
+          {/* Task Board */}
+          <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+            <h2 className="text-xl font-bold mb-4">Tasks</h2>
+            <form onSubmit={handleCreateTask} className="flex gap-2 mb-4">
+              <input type="text" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} placeholder="New task..." className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm" />
+              <button type="submit" className="bg-blue-600 px-4 py-2 rounded text-sm">Add</button>
+            </form>
+            <div className="space-y-2">
+              {tasks.map(t => (
+                <div key={t.id} className="p-3 bg-slate-800 rounded text-sm">{t.title}</div>
+              ))}
+            </div>
+          </div>
+
+          {/* Chat Room */}
+          <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 flex flex-col h-[500px]">
+            <h2 className="text-xl font-bold mb-4">#{activeChannel}</h2>
+            <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+              {messages.map((m, i) => (
+                <div key={i} className="bg-slate-800 p-3 rounded text-sm">
+                  <span className="font-bold text-blue-400 mr-2">{m.sender}</span>
+                  <span className="text-slate-300">{m.text}</span>
+                </div>
+              ))}
+            </div>
+            <form onSubmit={handleSendMessage} className="flex gap-2 mt-auto">
+              <input name="msg" type="text" placeholder="Message..." className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm" />
+              <button type="submit" className="bg-blue-600 px-4 py-2 rounded text-sm">Send</button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
