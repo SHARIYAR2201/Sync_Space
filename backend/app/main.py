@@ -369,6 +369,8 @@ def ai_ask(b: AskIn, u: User = Depends(current_user), m: Membership = Depends(me
     elif "priorit" in q:
         c = sorted([t for t in ts if t.status not in ("Done", "Cancelled") and t.due_date], key=lambda t: t.due_date)[:3]
         text = "Suggested focus (earliest deadlines first): " + ("; ".join(f"{t.title} ({t.due_date.date()})" for t in c) or "no dated open tasks.")
+    elif not any(k in q for k in ("summar", "status", "progress", "how many", "overview", "report")):
+        text = "I can only answer from your workspace data. Try: 'summary', 'overdue tasks', or 'what should I prioritise?'"
     else:
         text = (f"{st['open']} open and {st['tasks_completed']} completed tasks across {st['active_projects']} active project(s); "
                 f"{st['overdue']} overdue; {st['my_open']} open assigned to you.")

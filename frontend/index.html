@@ -847,7 +847,7 @@
                   <p className="text-slate-400 text-sm">Summarize activity, suggest task breakdowns, and identify delivery risks.</p>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-[70dvh] min-h-[420px] flex flex-col justify-between">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-[calc(100dvh-17rem)] min-h-[360px] flex flex-col justify-between">
                   <div className="overflow-y-auto space-y-4 pr-2">
                     {aiLogs.map((log, index) => (
                       <div key={index} className={`flex flex-col ${log.sender === "You" ? "items-end" : "items-start"}`}>
