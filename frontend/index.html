@@ -3,100 +3,1135 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SyncSpace Base | MVP</title>
+  <title>SyncSpace | Full-Stack Team Collaboration Platform</title>
+  <meta name="description" content="SyncSpace combines project management, real-time messaging, productivity analytics, and AI assistance in one unified workspace." />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2L2 7l10 5 10-5-10-5z'/><path d='M2 17l10 5 10-5'/><path d='M2 12l10 5 10-5'/></svg>" />
+  
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- React & Babel CDNs -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@0.468.0"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    img, svg, video { max-width: 100%; }
+    input, select, button, textarea { max-width: 100%; }
+    body { overflow-wrap: anywhere; }
+    /* Global anti-overflow & smooth scrolling */
+    html, body {
+      max-width: 100vw;
+      overflow-x: hidden;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+    /* Custom Scrollbar styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
 </head>
-<body class="h-full bg-slate-950 text-slate-100">
+<body class="h-full bg-slate-950 text-slate-100 antialiased selection:bg-blue-600 selection:text-white">
+
+  <noscript><p style="padding:2rem">SyncSpace needs JavaScript enabled.</p></noscript>
   <div id="root" class="min-h-full flex flex-col"></div>
+
   <script type="text/babel">
     const { useState, useEffect } = React;
 
+
+    const API = "/api/v1";
+    let session = null;
+    try { session = JSON.parse(localStorage.getItem("ss_session") || "null"); } catch (e) { session = null; }
+    function saveSession(s) { session = s; try { s ? localStorage.setItem("ss_session", JSON.stringify(s)) : localStorage.removeItem("ss_session"); } catch (e) {} }
+    let refreshing = null;
+    async function doRefresh() {
+      if (!session) return false;
+      refreshing = refreshing || fetch(API + "/auth/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: session.refresh_token }) })
+        .then(async r => { if (!r.ok) { saveSession(null); return false; } saveSession(await r.json()); return true; })
+        .catch(() => false).finally(() => { refreshing = null; });
+      return refreshing;
+    }
+    function errText(d, status) {
+      if (typeof d?.detail === "string") return d.detail;
+      if (Array.isArray(d?.detail)) return "Please check the highlighted fields: " + d.detail.map(x => (x.loc || []).slice(-1)[0]).filter(Boolean).join(", ") + ".";
+      return status >= 500 ? "Something went wrong on our side. Please try again." : "Request failed.";
+    }
+    async function api(path, { method = "GET", body } = {}, retried = false) {
+      let r;
+      try {
+        r = await fetch(API + path, { method, headers: { "Content-Type": "application/json", ...(session ? { Authorization: "Bearer " + session.access_token } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      } catch (e) { throw new Error("Cannot reach the server. Check your connection and try again."); }
+      if (r.status === 401 && session && !retried && !path.startsWith("/auth/")) {
+        if (await doRefresh()) return api(path, { method, body }, true);
+        window.dispatchEvent(new Event("ss-signout"));
+      }
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(errText(d, r.status));
+      return d;
+    }
+
+    const ICONS = lucide.icons;
+    function Icon({ name, className = "" }) {
+      const pascal = String(name).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join("");
+      const node = ICONS[pascal];
+      const inner = node ? node[2].map(([tag, a]) => `<${tag} ${Object.entries(a).map(([k, v]) => `${k}="${v}"`).join(" ")}/>`).join("") : "";
+      return <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: inner }} />;
+    }
+
+    const VIEWS = ["overview", "board", "tasks", "messages", "analytics", "ai", "settings"];
+    const COLORS = ["bg-blue-600", "bg-emerald-600", "bg-purple-600", "bg-amber-600"];
+    const initials = (n) => (n || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+    const decorate = (m) => ({ ...m, color: COLORS[(m.sender || "").length % 4] });
+    const parseHash = () => { const h = location.hash.replace(/^#\/?/, "") || "overview"; return VIEWS.includes(h) ? h : "404"; };
+    const STATUSES = ["Backlog", "Todo", "In Progress", "In Review", "Done", "Cancelled"];
+    const BOARD_COLS = ["Backlog", "Todo", "In Progress", "In Review", "Done"];
+    const PRIORITY_CLASS = (p) => (p === "High" || p === "Urgent") ? "bg-rose-500/20 text-rose-300" : p === "Medium" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300";
+
+    // --- AUTH SCREEN (sign in / sign up / forgot / reset) ---
+    function AuthScreen({ onAuthed }) {
+      const [mode, setMode] = useState("login");
+      const [f, setF] = useState({ name: "", email: "", password: "", token: "" });
+      const [msg, setMsg] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+      useEffect(() => { document.title = "SyncSpace | " + ({ login: "Sign in", register: "Create account", forgot: "Reset password", reset: "Choose new password" })[mode]; }, [mode]);
+      const submit = async (e) => {
+        e.preventDefault(); setMsg(null);
+        if (!f.email.includes("@")) return setMsg({ t: "error", m: "Please enter a valid email address." });
+        if (mode !== "forgot" && f.password.length < 8 && mode !== "login") return setMsg({ t: "error", m: "Password must be at least 8 characters." });
+        setBusy(true);
+        try {
+          if (mode === "login" || mode === "register") {
+            const d = await api("/auth/" + mode, { method: "POST", body: mode === "login" ? { email: f.email, password: f.password } : { name: f.name, email: f.email, password: f.password } });
+            saveSession(d); onAuthed(d.user, mode === "register" ? "Account created. Welcome to SyncSpace!" : "Signed in successfully.");
+          } else if (mode === "forgot") {
+            const d = await api("/auth/forgot", { method: "POST", body: { email: f.email } }); setMsg({ t: "success", m: d.message }); setMode("reset");
+          } else {
+            const d = await api("/auth/reset", { method: "POST", body: { token: f.token, password: f.password } }); setMsg({ t: "success", m: d.message }); setMode("login");
+          }
+        } catch (err) { setMsg({ t: "error", m: err.message }); }
+        setBusy(false);
+      };
+      const field = "w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500";
+      const title = { login: "Sign in to SyncSpace", register: "Create your account", forgot: "Reset your password", reset: "Choose a new password" }[mode];
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4 py-10 bg-slate-950">
+          <div className="w-full max-w-md space-y-6">
+            <a href="/" className="flex items-center justify-center gap-3" aria-label="SyncSpace home">
+              <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white"><Icon name="layers" className="w-5 h-5" /></div>
+              <span className="font-bold text-2xl text-white">SyncSpace</span>
+            </a>
+            <form onSubmit={submit} className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4" noValidate>
+              <h1 className="text-xl font-bold text-white">{title}</h1>
+              {msg && <div role="alert" className={`text-sm rounded-lg border p-3 ${msg.t === "error" ? "border-rose-500/50 text-rose-300 bg-rose-500/10" : "border-emerald-500/50 text-emerald-300 bg-emerald-500/10"}`}>{msg.m}</div>}
+              {mode === "register" && <div><label htmlFor="n" className="block text-xs font-semibold text-slate-400 uppercase mb-1">Full name</label><input id="n" className={field} value={f.name} onChange={set("name")} autoComplete="name" required /></div>}
+              {mode !== "reset" && <div><label htmlFor="e" className="block text-xs font-semibold text-slate-400 uppercase mb-1">Email</label><input id="e" type="email" className={field} value={f.email} onChange={set("email")} autoComplete="email" required /></div>}
+              {mode === "reset" && <div><label htmlFor="t" className="block text-xs font-semibold text-slate-400 uppercase mb-1">Reset token</label><input id="t" className={field} value={f.token} onChange={set("token")} required /><p className="text-xs text-slate-500 mt-1">Until an email provider is configured, the token is printed in the server log.</p></div>}
+              {mode !== "forgot" && <div><label htmlFor="p" className="block text-xs font-semibold text-slate-400 uppercase mb-1">{mode === "reset" ? "New password" : "Password"}</label><input id="p" type="password" className={field} value={f.password} onChange={set("password")} autoComplete={mode === "login" ? "current-password" : "new-password"} required /></div>}
+              <button disabled={busy} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white py-2.5 rounded-lg text-sm font-medium transition">{busy ? "Please wait…" : { login: "Sign in", register: "Create account", forgot: "Send reset instructions", reset: "Update password" }[mode]}</button>
+              <div className="flex flex-wrap justify-between gap-2 text-xs text-slate-400">
+                {mode === "login" ? <><button type="button" className="hover:text-white" onClick={() => { setMsg(null); setMode("register"); }}>Create an account</button><button type="button" className="hover:text-white" onClick={() => { setMsg(null); setMode("forgot"); }}>Forgot password?</button></>
+                  : <button type="button" className="hover:text-white" onClick={() => { setMsg(null); setMode("login"); }}>Back to sign in</button>}
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // --- MAIN APP COMPONENT ---
     function App() {
-      const [currentView, setCurrentView] = useState("board");
+      const [currentView, setCurrentView] = useState(parseHash());
+      const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+      const [user, setUser] = useState(null);
+      const [booting, setBooting] = useState(!!session);
       const [tasks, setTasks] = useState([]);
+      const [projects, setProjects] = useState([]);
+      const [members, setMembers] = useState([]);
+      const [channelList, setChannelList] = useState([]);
+      const [channels, setChannels] = useState({});
+      const [activeChannel, setActiveChannel] = useState("");
+      const [newMessage, setNewMessage] = useState("");
+      const [stats, setStats] = useState(null);
+      const [notifs, setNotifs] = useState({ unread: 0, items: [] });
+      const [notifOpen, setNotifOpen] = useState(false);
+      const [toasts, setToasts] = useState([]);
+      const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+      const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+      const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
       const [newTaskTitle, setNewTaskTitle] = useState("");
+      const [newTaskAssignee, setNewTaskAssignee] = useState("");
+      const [newTaskPriority, setNewTaskPriority] = useState("Medium");
+      const [newTaskProject, setNewTaskProject] = useState("");
+      const [newTaskDueDate, setNewTaskDueDate] = useState("");
+      const [newProjectName, setNewProjectName] = useState("");
+      const [inviteEmail, setInviteEmail] = useState("");
+      const [inviteRole, setInviteRole] = useState("Member");
+      const [profileName, setProfileName] = useState("");
+      const [aiQuery, setAiQuery] = useState("");
+      const [aiLogs, setAiLogs] = useState([{ sender: "AI Assistant", text: "Hi! Ask me for a workspace summary, overdue tasks, or what to prioritise. Answers come from your real task data and are suggestions only." }]);
+      const [isAiLoading, setIsAiLoading] = useState(false);
+
+      const canManage = user && ["Owner", "Admin"].includes(user.role);
+      const canCreateProject = user && ["Owner", "Admin", "Manager"].includes(user.role);
+      const activeMembers = members.filter(m => m.status === "Active");
+      const myTasks = tasks.filter(t => user && t.assignee_id === user.id);
+
+      const addToast = (message, type = "success") => {
+        const id = Date.now() + Math.random();
+        setToasts(prev => [...prev, { id, message, type }]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+      };
+      const fail = (e) => addToast(e.message || "Something went wrong.", "error");
+
+      const loadAll = async () => {
+        try {
+          const [p, t, m, c, d, n] = await Promise.all([api("/projects"), api("/tasks"), api("/members"), api("/channels"), api("/dashboard"), api("/notifications")]);
+          setProjects(p); setTasks(t); setMembers(m); setChannelList(c); setStats(d); setNotifs(n);
+          setActiveChannel(prev => prev || (c[0] ? c[0].name : ""));
+          if (p[0]) setNewTaskProject(prev => prev || String(p[0].id));
+        } catch (e) { fail(e); }
+      };
+      const refreshStats = () => Promise.all([api("/dashboard"), api("/projects"), api("/notifications")]).then(([d, p, n]) => { setStats(d); setProjects(p); setNotifs(n); }).catch(() => {});
+
+      const signOut = async (silent) => {
+        const rt = session && session.refresh_token;
+        saveSession(null); setUser(null); setTasks([]); setProjects([]); setMembers([]); setChannels({}); setChannelList([]); setActiveChannel(""); setStats(null);
+        if (rt) fetch(API + "/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: rt }) }).catch(() => {});
+        if (silent !== true) addToast("You have been signed out.");
+      };
+
+      const onAuthed = (u, message) => { api("/auth/me").then(me => { setUser(me); setProfileName(me.name); addToast(message); }).catch(fail); };
+
+      useEffect(() => {  // restore session on page load
+        if (!session) return;
+        api("/auth/me").then(me => { setUser(me); setProfileName(me.name); }).catch(() => saveSession(null)).finally(() => setBooting(false));
+        const out = () => signOut(true); window.addEventListener("ss-signout", out); return () => window.removeEventListener("ss-signout", out);
+      }, []);
+      useEffect(() => { if (user) loadAll(); }, [user && user.id]);
+      useEffect(() => { const h = () => setCurrentView(parseHash()); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
 
       useEffect(() => {
-        lucide.createIcons();
-        fetchTasks();
-      }, [currentView]);
+        const titles = { overview: "Workspace Overview", board: "Kanban Board", tasks: "My Tasks", messages: "Team Messages", analytics: "Team Analytics", ai: "AI Assistant", settings: "Workspace Settings", 404: "Page Not Found" };
+        if (user) document.title = "SyncSpace | " + titles[currentView];
+        if (user && currentView === "overview") refreshStats();
+      }, [currentView, user && user.id]);
 
-      const fetchTasks = async () => {
-        try {
-          const res = await fetch('http://localhost:8000/api/v1/tasks');
-          if (res.ok) setTasks(await res.json());
-        } catch (err) {
-          console.error("Ensure backend is running on port 8000");
-        }
-      };
+      // Channel history + live WebSocket updates (messages are persisted by the API before broadcast)
+      const channelId = (channelList.find(c => c.name === activeChannel) || {}).id;
+      useEffect(() => {
+        if (!user || !channelId) return;
+        let ws, closed = false, timer;
+        api(`/channels/${channelId}/messages`).then(rows => setChannels(prev => ({ ...prev, [activeChannel]: rows.map(decorate) }))).catch(fail);
+        const connect = () => {
+          ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/v1/ws?token=${session.access_token}&channel_id=${channelId}`);
+          ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === "message.created") appendMessage(activeChannel, m.data); };
+          ws.onclose = () => { if (!closed) timer = setTimeout(async () => { await api("/auth/me").catch(() => {}); if (session) connect(); }, 3000); };
+        };
+        connect();
+        return () => { closed = true; clearTimeout(timer); ws && ws.close(); };
+      }, [channelId, user && user.id]);
+      const appendMessage = (ch, m) => setChannels(prev => { const cur = prev[ch] || []; return cur.some(x => x.id === m.id) ? prev : { ...prev, [ch]: [...cur, decorate(m)] }; });
 
       const handleCreateTask = async (e) => {
         e.preventDefault();
-        if (!newTaskTitle.trim()) return;
-        
-        const newTask = {
-          title: newTaskTitle,
-          assignee: "Unassigned",
-          status: "Backlog",
-          priority: "Medium",
-          project: "Website redesign"
-        };
-
-        const res = await fetch('http://localhost:8000/api/v1/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newTask)
-        });
-
-        if (res.ok) {
-          setNewTaskTitle("");
-          fetchTasks();
-        }
+        if (!newTaskTitle.trim()) return addToast("Please provide a valid task title.", "error");
+        if (!newTaskProject) return addToast("Create a project first, then add tasks to it.", "error");
+        try {
+          const t = await api("/tasks", { method: "POST", body: { title: newTaskTitle.trim(), project_id: Number(newTaskProject), assignee_id: newTaskAssignee ? Number(newTaskAssignee) : null, priority: newTaskPriority, due_date: newTaskDueDate || null } });
+          setTasks([t, ...tasks]); setNewTaskTitle(""); setNewTaskDueDate(""); setIsTaskModalOpen(false);
+          addToast(`Task "${t.title}" created successfully.`); refreshStats();
+        } catch (err) { fail(err); }
+      };
+      const moveTask = async (task, status) => {
+        const before = tasks; setTasks(tasks.map(t => t.id === task.id ? { ...t, status } : t));
+        try { await api(`/tasks/${task.id}`, { method: "PATCH", body: { status } }); addToast(`Moved "${task.title}" to ${status}.`); refreshStats(); }
+        catch (err) { setTasks(before); fail(err); }
+      };
+      const handleCreateProject = async (e) => {
+        e.preventDefault();
+        if (!newProjectName.trim()) return addToast("Please enter a project name.", "error");
+        try {
+          const p = await api("/projects", { method: "POST", body: { name: newProjectName.trim() } });
+          setProjects([...projects, p]); setNewTaskProject(prev => prev || String(p.id)); setNewProjectName(""); setIsProjectModalOpen(false); addToast(`Project "${p.name}" created.`); refreshStats();
+        } catch (err) { fail(err); }
+      };
+      const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (!newMessage.trim()) return addToast("Cannot send an empty message.", "error");
+        if (!channelId) return addToast("No channel selected.", "error");
+        try { const m = await api(`/channels/${channelId}/messages`, { method: "POST", body: { body: newMessage.trim() } }); appendMessage(activeChannel, m); setNewMessage(""); }
+        catch (err) { fail(err); }
+      };
+      const handleInviteMember = async (e) => {
+        e.preventDefault();
+        if (!inviteEmail.trim() || !inviteEmail.includes("@")) return addToast("Please enter a valid email address.", "error");
+        try {
+          const d = await api("/invitations", { method: "POST", body: { email: inviteEmail.trim(), role: inviteRole } });
+          setMembers(await api("/members")); setInviteEmail(""); setIsInviteModalOpen(false);
+          addToast(d.message + " (Email delivery needs a provider; the token is in the server log.)");
+        } catch (err) { fail(err); }
+      };
+      const removeMember = async (m) => {
+        if (!window.confirm(`Remove ${m.name} from this workspace?`)) return;
+        try { await api(`/members/${m.id}`, { method: "DELETE" }); setMembers(members.filter(x => x.id !== m.id)); addToast(`${m.name} was removed.`); } catch (err) { fail(err); }
+      };
+      const saveProfile = async (e) => {
+        e.preventDefault();
+        if (!profileName.trim()) return addToast("Name cannot be empty.", "error");
+        try { await api("/auth/me", { method: "PATCH", body: { name: profileName.trim() } }); setUser({ ...user, name: profileName.trim() }); addToast("Profile updated."); } catch (err) { fail(err); }
+      };
+      const markAllRead = async () => { try { await api("/notifications/read-all", { method: "POST" }); setNotifs({ ...notifs, unread: 0, items: notifs.items.map(i => ({ ...i, read: true })) }); } catch (err) { fail(err); } };
+      const handleAiSubmit = async (e) => {
+        e.preventDefault();
+        if (!aiQuery.trim()) return addToast("Please type a question for the assistant.", "error");
+        const q = aiQuery.trim(); setAiLogs(prev => [...prev, { sender: "You", text: q }]); setAiQuery(""); setIsAiLoading(true);
+        try { const d = await api("/ai/ask", { method: "POST", body: { question: q } }); setAiLogs(prev => [...prev, { sender: "AI Assistant", text: `${d.answer}\n\n${d.note}` }]); }
+        catch (err) { fail(err); }
+        setIsAiLoading(false);
       };
 
-      return (
-        <div className="min-h-screen flex flex-col">
-          <header className="bg-slate-900 border-b border-slate-800 h-16 flex items-center px-6">
-            <h1 className="text-xl font-bold text-blue-500 flex items-center gap-2">
-              <i data-lucide="layers"></i> SyncSpace MVP
-            </h1>
-          </header>
-          
-          <main className="flex-1 p-6 max-w-6xl mx-auto w-full space-y-6">
-            <form onSubmit={handleCreateTask} className="flex gap-4">
-              <input 
-                type="text" 
-                value={newTaskTitle} 
-                onChange={e => setNewTaskTitle(e.target.value)} 
-                placeholder="New task title..." 
-                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"
-              />
-              <button type="submit" className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg font-medium transition-colors">Add Task</button>
-            </form>
+      const navigateTo = (view) => {
+        setMobileMenuOpen(false);
+        if (view === "logout") return signOut();
+        if (parseHash() === view) setCurrentView(view); else location.hash = "/" + view;
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {["Backlog", "In Progress", "In Review", "Done"].map(status => (
-                <div key={status} className="bg-slate-900 rounded-xl p-4 min-h-[300px] border border-slate-800">
-                  <h3 className="text-xs font-bold uppercase text-slate-400 mb-4">{status}</h3>
+      const bell = (
+        <div className="relative">
+          <button onClick={() => setNotifOpen(!notifOpen)} className="relative p-2 text-slate-300 hover:text-white rounded-md hover:bg-slate-800 transition" aria-label={`Notifications, ${notifs.unread} unread`}>
+            <Icon name="bell" className="w-5 h-5" />
+            {notifs.unread > 0 && <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{notifs.unread}</span>}
+          </button>
+          {notifOpen && (
+            <div className="absolute right-0 mt-2 w-72 max-w-[85vw] bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-50 p-3 space-y-2">
+              <div className="flex justify-between items-center"><span className="text-sm font-bold text-white">Notifications</span><button onClick={markAllRead} className="text-xs text-blue-400 hover:text-blue-300">Mark all read</button></div>
+              {notifs.items.length === 0 ? <p className="text-xs text-slate-500 py-4 text-center">You're all caught up.</p> :
+                <ul className="max-h-64 overflow-y-auto space-y-1">{notifs.items.map(n => <li key={n.id} className={`text-xs p-2 rounded ${n.read ? "text-slate-400" : "text-slate-100 bg-slate-800"}`}>{n.text}</li>)}</ul>}
+            </div>
+          )}
+        </div>
+      );
+
+      if (booting) return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Loading your workspace…</div>;
+      if (!user) return <AuthScreen onAuthed={onAuthed} />;
+
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+          
+          {/* TOP TOAST MESSAGES */}
+          <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full px-4 pointer-events-none">
+            {toasts.map(toast => (
+              <div 
+                key={toast.id}
+                className={`pointer-events-auto flex items-center justify-between p-4 rounded-lg shadow-xl border text-sm font-medium transition-all duration-300 transform translate-y-0 ${
+                  toast.type === "success" 
+                    ? "bg-slate-900 border-emerald-500/50 text-emerald-300" 
+                    : "bg-slate-900 border-rose-500/50 text-rose-300"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Icon name={toast.type === "success" ? "check-circle" : "alert-circle"} className="w-5 h-5 shrink-0" />
+                  <span>{toast.message}</span>
+                </div>
+                <button 
+                  onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+                  className="text-slate-400 hover:text-white ml-3"
+                >
+                  <Icon name="x" className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* MAIN HEADER / NAV BAR */}
+          <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur border-b border-slate-800">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+              
+              {/* CLICKABLE LOGO */}
+              <button 
+                onClick={() => navigateTo("overview")}
+                className="flex items-center gap-3 group text-left focus:outline-none" aria-label="SyncSpace home"
+              >
+                <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 group-hover:bg-blue-500 transition">
+                  <Icon name="layers" className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="font-bold text-lg text-white tracking-tight group-hover:text-blue-400 transition">SyncSpace</span>
+                  <span className="block text-[10px] text-slate-400 font-mono tracking-wider uppercase -mt-1">{user.workspace}</span>
+                </div>
+              </button>
+
+              {/* DESKTOP MAIN NAVIGATION */}
+              <nav className="hidden md:flex items-center gap-1">
+                {[
+                  { id: "overview", label: "Overview", icon: "layout-dashboard" },
+                  { id: "board", label: "Kanban Board", icon: "kanban" },
+                  { id: "tasks", label: "My Tasks", icon: "check-square" },
+                  { id: "messages", label: "Messages", icon: "message-square" },
+                  { id: "analytics", label: "Analytics", icon: "bar-chart-2" },
+                  { id: "ai", label: "AI Copilot", icon: "sparkles" }
+                ].map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => navigateTo(item.id)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition ${
+                      currentView === item.id 
+                        ? "bg-slate-800 text-blue-400 border border-slate-700" 
+                        : "text-slate-300 hover:text-white hover:bg-slate-800/50"
+                    }`}
+                  >
+                    <Icon name={item.icon} className="w-4 h-4" />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+
+              {/* DESKTOP HEADER ACTIONS */}
+              <div className="hidden md:flex items-center gap-3">
+                {bell}
+                <button 
+                  onClick={() => setIsTaskModalOpen(true)}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-md text-sm font-medium transition shadow-lg shadow-blue-600/20"
+                >
+                  <Icon name="plus" className="w-4 h-4" />
+                  <span>New Task</span>
+                </button>
+                
+                <button 
+                  onClick={() => navigateTo("settings")}
+                  className="p-2 text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition"
+                  title="Workspace Settings"
+                >
+                  <Icon name="settings" className="w-5 h-5" />
+                </button>
+
+                <button 
+                  onClick={() => navigateTo("logout")}
+                  className="p-2 text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition"
+                  title="Sign out" aria-label="Sign out"
+                >
+                  <Icon name="log-out" className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* MOBILE HAMBURGER BUTTON */}
+              <div className="flex md:hidden items-center gap-2">
+                {bell}
+                <button 
+                  onClick={() => setIsTaskModalOpen(true)}
+                  className="bg-blue-600 text-white p-2 rounded-md" aria-label="New task"
+                >
+                  <Icon name="plus" className="w-5 h-5" />
+                </button>
+                <button 
+                  onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-md focus:outline-none"
+                  aria-label="Toggle Mobile Menu"
+                >
+                  <Icon name={mobileMenuOpen ? "x" : "menu"} className="w-6 h-6" />
+                </button>
+              </div>
+
+            </div>
+
+            {/* MOBILE NAVIGATION DRAWER */}
+            {mobileMenuOpen && (
+              <div className="md:hidden bg-slate-900 border-b border-slate-800 px-4 pt-2 pb-4 space-y-1">
+                {[
+                  { id: "overview", label: "Overview", icon: "layout-dashboard" },
+                  { id: "board", label: "Kanban Board", icon: "kanban" },
+                  { id: "tasks", label: "My Tasks", icon: "check-square" },
+                  { id: "messages", label: "Messages", icon: "message-square" },
+                  { id: "analytics", label: "Analytics", icon: "bar-chart-2" },
+                  { id: "ai", label: "AI Copilot", icon: "sparkles" },
+                  { id: "settings", label: "Settings", icon: "settings" },
+                  { id: "logout", label: "Sign out", icon: "log-out" }
+                ].map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => navigateTo(item.id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-base font-medium transition ${
+                      currentView === item.id 
+                        ? "bg-blue-600/20 text-blue-400 border border-blue-500/30" 
+                        : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <Icon name={item.icon} className="w-5 h-5" />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </header>
+
+          {/* MAIN CONTENT AREA BASED ON VIEW */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            
+            {/* 1. WORKSPACE OVERVIEW VIEW */}
+            {currentView === "overview" && (
+              <div className="space-y-6">
+                
+                {/* Header Welcome Banner */}
+                <div className="bg-gradient-to-r from-blue-900/40 via-slate-900 to-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div>
+                    <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Welcome back, {user.name.split(" ")[0]}</h1>
+                    <p className="text-slate-400 text-sm mt-1">Here's your workspace at a glance, calculated from your real task data.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => navigateTo("board")} className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">
+                      View Board
+                    </button>
+                    <button onClick={() => setIsInviteModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                      Invite Member
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metric Summary Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active projects</span>
+                    <div className="text-3xl font-extrabold text-blue-400 mt-2">{stats ? String(stats.active_projects).padStart(2, "0") : "…"}</div>
+                    <div className="text-xs text-slate-500 mt-1">Status: Active</div>
+                  </div>
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tasks completed</span>
+                    <div className="text-3xl font-extrabold text-emerald-400 mt-2">{stats ? String(stats.tasks_completed).padStart(2, "0") : "…"}</div>
+                    <div className="text-xs text-emerald-500 mt-1">{stats ? stats.weekly[6].count : 0} in the last 7 days</div>
+                  </div>
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Overdue tasks</span>
+                    <div className="text-3xl font-extrabold text-rose-400 mt-2">{stats ? String(stats.overdue).padStart(2, "0") : "…"}</div>
+                    <div className="text-xs text-rose-500 mt-1">Past due and still open</div>
+                  </div>
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Team members</span>
+                    <div className="text-3xl font-extrabold text-purple-400 mt-2">{stats ? String(stats.members).padStart(2, "0") : "…"}</div>
+                    <div className="text-xs text-slate-500 mt-1">In this workspace</div>
+                  </div>
+                </div>
+
+                {/* Main Progress & Activity Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  
+                  {/* Project Progress Section */}
+                  <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-bold text-white">Project progress</h2>
+                      {canCreateProject ? <button onClick={() => setIsProjectModalOpen(true)} className="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3 py-1.5 rounded-md">New project</button> : <span className="text-xs text-slate-400">Calculated from task data</span>}
+                    </div>
+                    <div className="space-y-5">
+                      {projects.length === 0 && <p className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-800 rounded-lg">No projects yet. Create your first project to start tracking progress.</p>}
+                      {projects.map(proj => (
+                        <div key={proj.id} className="space-y-1.5">
+                          <div className="flex justify-between text-sm font-medium">
+                            <span className="text-slate-200">{proj.name}</span>
+                            <span className="text-slate-400">{proj.progress}%</span>
+                          </div>
+                          <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${proj.progress}%` }}></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Recent Activity Section */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                    <h2 className="text-lg font-bold text-white mb-4">Recent activity</h2>
+                    {stats && stats.activity.length === 0 && <p className="text-sm text-slate-500">No activity yet.</p>}
+                    <ul className="space-y-4">
+                      {(stats ? stats.activity : []).map(a => ({ text: a.text, color: "bg-blue-500", time: new Date(a.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) })).map((act, idx) => (
+                        <li key={idx} className="flex items-start gap-3">
+                          <span className={`w-2 h-2 rounded-full ${act.color} mt-2 shrink-0`}></span>
+                          <div>
+                            <p className="text-sm text-slate-300">{act.text}</p>
+                            <span className="text-xs text-slate-500">{act.time}</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                </div>
+
+              </div>
+            )}
+
+            {/* 2. KANBAN BOARD VIEW */}
+            {currentView === "board" && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h1 className="text-2xl font-bold text-white">Project Board</h1>
+                    <p className="text-slate-400 text-sm">{projects.length} project(s) · {tasks.length} task(s)</p>
+                  </div>
+                  <button onClick={() => setIsTaskModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 self-start sm:self-auto">
+                    <Icon name="plus" className="w-4 h-4" /> Add Task
+                  </button>
+                </div>
+
+                {/* Kanban Columns (Overflow Wrapper for Mobile) */}
+                <div className="md:overflow-x-auto pb-4">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4 md:min-w-[1000px]">
+                    {BOARD_COLS.map(status => {
+                      const colTasks = tasks.filter(t => t.status === status);
+                      return (
+                        <div key={status} className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 flex flex-col">
+                          <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+                            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">{status}</span>
+                            <span className="bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded-full font-mono">{colTasks.length}</span>
+                          </div>
+                          
+                          <div className="space-y-3 flex-1">
+                            {colTasks.length === 0 ? (
+                              <div className="text-center py-8 text-slate-600 text-xs italic border border-dashed border-slate-800 rounded-lg">
+                                No tasks in {status}
+                              </div>
+                            ) : (
+                              colTasks.map(task => (
+                                <div key={task.id} className="bg-slate-800/90 border border-slate-700/60 hover:border-blue-500/50 rounded-lg p-3.5 shadow-sm transition space-y-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <h3 className="text-sm font-semibold text-slate-200">{task.title}</h3>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${PRIORITY_CLASS(task.priority)}`}>
+                                      {task.priority}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/40">
+                                    <div className="flex items-center gap-1">
+                                      <Icon name="user" className="w-3.5 h-3.5 text-slate-500" />
+                                      <span>{task.assignee}</span>
+                                    </div>
+                                    
+                                    {/* Action dropdown/move quick toggle */}
+                                    <select
+                                      value={task.status}
+                                      onChange={(e) => moveTask(task, e.target.value)}
+                                      aria-label={`Status of ${task.title}`}
+                                      className="bg-slate-900 text-slate-300 text-xs border border-slate-700 rounded px-1.5 py-0.5 focus:outline-none"
+                                    >
+                                      {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 3. MY TASKS LIST VIEW */}
+            {currentView === "tasks" && (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h1 className="text-2xl font-bold text-white">My Tasks</h1>
+                    <p className="text-slate-400 text-sm">Work items assigned to you across all projects</p>
+                  </div>
+                  <button onClick={() => setIsTaskModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                    + New Task
+                  </button>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+                  <table className="w-full text-left text-sm text-slate-300">
+                    <thead className="bg-slate-800/60 text-slate-400 text-xs uppercase font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="p-4">Task Title</th>
+                        <th className="p-4">Project</th>
+                        <th className="p-4">Assignee</th>
+                        <th className="p-4">Priority</th>
+                        <th className="p-4">Status</th>
+                        <th className="p-4">Due Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {myTasks.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-500">Nothing assigned to you yet.</td></tr>}
+                      {myTasks.map(task => (
+                        <tr key={task.id} className="hover:bg-slate-800/40 transition">
+                          <td className="p-4 font-medium text-white">{task.title}</td>
+                          <td className="p-4 text-slate-400">{task.project}</td>
+                          <td className="p-4">{task.assignee}</td>
+                          <td className="p-4">
+                            <span className={`text-xs px-2 py-0.5 rounded font-semibold ${PRIORITY_CLASS(task.priority)}`}>
+                              {task.priority}
+                            </span>
+                          </td>
+                          <td className="p-4">
+                            <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-full border border-slate-700">
+                              {task.status}
+                            </span>
+                          </td>
+                          <td className="p-4 text-slate-400 font-mono text-xs">{task.dueDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 4. TEAM MESSAGING VIEW */}
+            {currentView === "messages" && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl flex flex-col md:flex-row h-[calc(100dvh-9rem)] min-h-[520px] overflow-hidden">
+                
+                {/* Channel Sidebar */}
+                <div className="w-full md:w-64 bg-slate-950 border-b md:border-b-0 md:border-r border-slate-800 p-4 flex flex-col justify-between shrink-0">
+                  <div>
+                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Channels</h2>
+                    <div className="flex md:block gap-1 overflow-x-auto md:space-y-1">
+                      {channelList.map(c => c.name).map(ch => (
+                        <button
+                          key={ch}
+                          onClick={() => setActiveChannel(ch)}
+                          className={`w-full text-left px-3 py-2 rounded-md text-sm font-medium transition flex items-center justify-between whitespace-nowrap ${
+                            activeChannel === ch ? "bg-blue-600 text-white" : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"
+                          }`}
+                        >
+                          <span>{ch}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-800 hidden md:block">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Team</span>
+                    <div className="space-y-1 text-sm text-slate-400">
+                      {activeMembers.map(m => (
+                        <div key={m.id} className="flex items-center gap-2 px-2 py-1.5 rounded">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                          <span>{m.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Chat Active Area */}
+                <div className="flex-1 flex flex-col h-full bg-slate-900">
+                  <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+                    <div>
+                      <h3 className="font-bold text-white text-base">{activeChannel}</h3>
+                      <p className="text-xs text-slate-400">{activeMembers.length} member(s) in this workspace</p>
+                    </div>
+                  </div>
+
+                  {/* Messages Feed */}
+                  <div className="flex-1 p-4 overflow-y-auto space-y-4">
+                    {(channels[activeChannel] || []).length === 0 && <p className="text-sm text-slate-500 text-center py-10">No messages yet. Say hello!</p>}
+                    {(channels[activeChannel] || []).map(msg => (
+                      <div key={msg.id} className="flex items-start gap-3">
+                        <div className={`w-8 h-8 rounded-full ${msg.color} text-white font-bold flex items-center justify-center text-xs shrink-0`}>
+                          {msg.avatar}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-slate-200">{msg.sender}</span>
+                            <span className="text-[11px] text-slate-500 font-mono">{msg.time}</span>
+                          </div>
+                          <p className="text-sm text-slate-300 mt-0.5 bg-slate-800/60 whitespace-pre-wrap p-2.5 rounded-lg border border-slate-800">{msg.text}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Message Input Box */}
+                  <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-800 flex gap-2">
+                    <input 
+                      type="text"
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      placeholder={`Message ${activeChannel}`} maxLength={4000} aria-label="Message"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                    />
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                      Send
+                    </button>
+                  </form>
+                </div>
+
+              </div>
+            )}
+
+            {/* 5. TEAM ANALYTICS VIEW */}
+            {currentView === "analytics" && (
+              <div className="space-y-6">
+                <div>
+                  <h1 className="text-2xl font-bold text-white">Team Analytics</h1>
+                  <p className="text-slate-400 text-sm">Project delivery and workload performance metrics</p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  
+                  {/* Visual Chart Card */}
+                  <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6">
+                    <h2 className="text-lg font-bold text-white mb-2">Tasks completed per week</h2>
+                    <p className="text-xs text-slate-400 mb-6">Tasks marked Done in each of the last 7 weeks</p>
+                    
+                    {/* Responsive Bar Chart Simulation */}
+                    <div className="h-56 flex items-end justify-between gap-2 pt-6 px-2 border-b border-slate-800">
+                      {(stats ? stats.weekly : []).map(w => ({ week: w.week, count: w.count, height: Math.max(4, Math.round(100 * w.count / Math.max(1, ...stats.weekly.map(x => x.count)))) + "%" })).map((bar, i) => (
+                        <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
+                          <span className="text-xs text-slate-400 group-hover:text-blue-400 font-mono">{bar.count}</span>
+                          <div 
+                            className="w-full bg-blue-600/80 group-hover:bg-blue-500 rounded-t transition-all duration-300"
+                            style={{ height: bar.height }}
+                          ></div>
+                          <span className="text-xs text-slate-500 font-semibold">{bar.week}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Delivery Health Stat Card */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+                    <h2 className="text-lg font-bold text-white">Delivery health</h2>
+                    
+                    <div className="space-y-4">
+                      <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
+                        <span className="text-xs text-slate-400 font-medium">On-time completion</span>
+                        <div className="text-3xl font-extrabold text-emerald-400 mt-1">{stats && stats.on_time_pct !== null ? stats.on_time_pct + "%" : "n/a"}</div>
+                      </div>
+
+                      <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
+                        <span className="text-xs text-slate-400 font-medium">Open tasks</span>
+                        <div className="text-3xl font-extrabold text-blue-400 mt-1">{stats ? stats.open : "…"}</div>
+                      </div>
+
+                      <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
+                        <span className="text-xs text-slate-400 font-medium">Overdue tasks</span>
+                        <div className="text-3xl font-extrabold text-rose-400 mt-1">{stats ? stats.overdue : "…"}</div>
+                      </div>
+
+                      <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
+                        <span className="text-xs text-slate-400 font-medium">Members</span>
+                        <div className="text-3xl font-extrabold text-purple-400 mt-1">{stats ? stats.members : "…"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* 6. AI COPILOT VIEW */}
+            {currentView === "ai" && (
+              <div className="max-w-4xl mx-auto space-y-6">
+                <div>
+                  <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <Icon name="sparkles" className="w-6 h-6 text-purple-400" />
+                    SyncSpace AI Assistant
+                  </h1>
+                  <p className="text-slate-400 text-sm">Summarize activity, suggest task breakdowns, and identify delivery risks.</p>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-[70dvh] min-h-[420px] flex flex-col justify-between">
+                  <div className="overflow-y-auto space-y-4 pr-2">
+                    {aiLogs.map((log, index) => (
+                      <div key={index} className={`flex flex-col ${log.sender === "You" ? "items-end" : "items-start"}`}>
+                        <div className={`max-w-xl rounded-xl p-4 text-sm ${
+                          log.sender === "You" 
+                            ? "bg-blue-600 text-white rounded-br-none" 
+                            : "bg-slate-800 border border-slate-700 text-slate-200 rounded-bl-none"
+                        }`}>
+                          <span className="block text-[10px] font-mono text-slate-400 mb-1">{log.sender}</span>
+                          <span className="whitespace-pre-wrap">{log.text}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {isAiLoading && (
+                      <div className="text-xs text-purple-400 animate-pulse flex items-center gap-2">
+                        <Icon name="loader" className="w-4 h-4 animate-spin" /> Working on it…
+                      </div>
+                    )}
+                  </div>
+
+                  <form onSubmit={handleAiSubmit} className="pt-4 border-t border-slate-800 flex gap-2">
+                    <input 
+                      type="text" 
+                      value={aiQuery} 
+                      onChange={(e) => setAiQuery(e.target.value)}
+                      placeholder="Try: summary, overdue tasks, what to prioritise" maxLength={500} aria-label="Ask the assistant"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-sm text-slate-100 focus:outline-none focus:border-purple-500"
+                    />
+                    <button type="submit" className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition">
+                      Ask AI
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* 7. SETTINGS & MEMBERS VIEW */}
+            {currentView === "settings" && (
+              <div className="max-w-4xl mx-auto space-y-6">
+                <div>
+                  <h1 className="text-2xl font-bold text-white">Workspace Settings</h1>
+                  <p className="text-slate-400 text-sm">Manage team access roles, permissions, and profiles</p>
+                </div>
+
+                <form onSubmit={saveProfile} className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col sm:flex-row sm:items-end gap-3">
+                  <div className="flex-1"><label htmlFor="pn" className="block text-xs font-semibold text-slate-400 uppercase mb-1">Your name</label>
+                    <input id="pn" value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={120} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500" /></div>
+                  <button className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm">Save profile</button>
+                </form>
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-white">Team Members ({members.length})</h2>
+                      <p className="text-xs text-slate-400">Manage permissions and invitation status</p>
+                    </div>
+                    {canManage && <button onClick={() => setIsInviteModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                      Invite Member
+                    </button>}
+                  </div>
+
                   <div className="space-y-3">
-                    {tasks.filter(t => t.status === status).map(task => (
-                      <div key={task.id} className="bg-slate-800 p-3 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
-                        <p className="text-sm font-medium">{task.title}</p>
-                        <p className="text-xs text-slate-500 mt-2">{task.project} • {task.priority}</p>
+                    {members.map(m => (
+                      <div key={m.id} className="flex flex-wrap gap-3 items-center justify-between p-3.5 bg-slate-950 rounded-lg border border-slate-800">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-slate-800 text-blue-400 font-bold flex items-center justify-center text-xs">
+                            {initials(m.name)}
+                          </div>
+                          <div>
+                            <div className="text-sm font-bold text-white">{m.name}</div>
+                            <div className="text-xs text-slate-400">{m.email}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded border border-slate-700">
+                            {m.role}
+                          </span>
+                          <span className={`text-xs ${m.status === "Active" ? "text-emerald-400" : "text-amber-400"}`}>
+                            {m.status}
+                          </span>
+                          {canManage && m.id > 0 && m.role !== "Owner" && m.id !== user.id && <button onClick={() => removeMember(m)} className="text-xs text-rose-400 hover:text-rose-300" aria-label={`Remove ${m.name}`}>Remove</button>}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
+
+            {/* 8. CUSTOM 404 PAGE VIEW */}
+            {currentView === "404" && (
+              <div className="py-16 text-center space-y-4 max-w-md mx-auto">
+                <div className="w-20 h-20 mx-auto bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center justify-center text-rose-400">
+                  <Icon name="alert-triangle" className="w-10 h-10" />
+                </div>
+                <h1 className="text-4xl font-extrabold text-white">404 - Page Not Found</h1>
+                <p className="text-slate-400 text-sm">
+                  We couldn't find that page. It may have moved or never existed.
+                </p>
+                <div className="pt-4">
+                  <button onClick={() => navigateTo("overview")} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg text-sm font-medium transition shadow-lg shadow-blue-600/20">
+                    Return to Workspace Overview
+                  </button>
+                </div>
+              </div>
+            )}
+
           </main>
+
+          {/* CREATE TASK MODAL */}
+          {isTaskModalOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-6 shadow-2xl space-y-4">
+                <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                  <h3 className="text-lg font-bold text-white">Create New Task</h3>
+                  <button onClick={() => setIsTaskModalOpen(false)} className="text-slate-400 hover:text-white">
+                    <Icon name="x" className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateTask} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Task Title</label>
+                    <input 
+                      type="text"
+                      value={newTaskTitle}
+                      onChange={(e) => setNewTaskTitle(e.target.value)}
+                      placeholder="What needs to be done?" maxLength={200}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Assignee</label>
+                      <select 
+                        value={newTaskAssignee} 
+                        onChange={(e) => setNewTaskAssignee(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200"
+                      >
+                        <option value="">Unassigned</option>
+                        {activeMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Priority</label>
+                      <select 
+                        value={newTaskPriority} 
+                        onChange={(e) => setNewTaskPriority(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200"
+                      >
+                        <option value="Low">Low</option>
+                        <option value="Medium">Medium</option>
+                        <option value="High">High</option>
+                        <option value="Urgent">Urgent</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Project</label>
+                    <select 
+                      value={newTaskProject} 
+                      onChange={(e) => setNewTaskProject(e.target.value)} aria-label="Project"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200"
+                    >
+                      {projects.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Due date (optional)</label>
+                    <input type="date" value={newTaskDueDate} onChange={(e) => setNewTaskDueDate(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button type="button" onClick={() => setIsTaskModalOpen(false)} className="px-4 py-2 text-sm text-slate-400 hover:text-white">
+                      Cancel
+                    </button>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                      Create Task
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {isProjectModalOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <form onSubmit={handleCreateProject} className="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-6 shadow-2xl space-y-4">
+                <h3 className="text-lg font-bold text-white">New project</h3>
+                <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} maxLength={120} aria-label="Project name" placeholder="Project name" className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setIsProjectModalOpen(false)} className="px-4 py-2 text-sm text-slate-400 hover:text-white">Cancel</button>
+                  <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Create project</button>
+                </div>
+              </form>
+            </div>
+          )}
+          {/* INVITE MEMBER MODAL */}
+          {isInviteModalOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-6 shadow-2xl space-y-4">
+                <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                  <h3 className="text-lg font-bold text-white">Invite Workspace Member</h3>
+                  <button onClick={() => setIsInviteModalOpen(false)} className="text-slate-400 hover:text-white">
+                    <Icon name="x" className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleInviteMember} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Email Address</label>
+                    <input 
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      placeholder="name@example.com"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase mb-1">Role</label>
+                    <select 
+                      value={inviteRole} 
+                      onChange={(e) => setInviteRole(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200"
+                    >
+                      <option value="Admin">Admin</option>
+                      <option value="Manager">Manager</option>
+                      <option value="Member">Member</option>
+                    </select>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button type="button" onClick={() => setIsInviteModalOpen(false)} className="px-4 py-2 text-sm text-slate-400 hover:text-white">
+                      Cancel
+                    </button>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                      Send Invitation
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* FOOTER */}
+          <footer className="bg-slate-900 border-t border-slate-800 py-8 mt-auto">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
+              
+              <div className="flex items-center gap-3">
+                <button onClick={() => navigateTo("overview")} className="font-bold text-white flex items-center gap-2">
+                  <div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center text-xs">
+                    <Icon name="layers" className="w-3.5 h-3.5" />
+                  </div>
+                  <span>SyncSpace</span>
+                </button>
+                <span className="text-slate-500 text-sm">|</span>
+                <span className="text-xs text-slate-400">© {new Date().getFullYear()} SyncSpace Inc. All rights reserved.</span>
+              </div>
+
+              {/* FOOTER LINKS */}
+              <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-slate-400">
+                <button onClick={() => navigateTo("overview")} className="hover:text-white transition">Overview</button>
+                <button onClick={() => navigateTo("analytics")} className="hover:text-white transition">Analytics</button>
+                <button onClick={() => navigateTo("ai")} className="hover:text-white transition">AI Copilot</button>
+                <button onClick={() => navigateTo("settings")} className="hover:text-white transition">Settings</button>
+                <a href="tel:+18005550199" className="hover:text-blue-400 transition font-mono">+1 (800) 555-0199</a>
+                <a href="mailto:support@syncspace.io" className="hover:text-blue-400 transition font-mono">support@syncspace.io</a>
+              </div>
+
+            </div>
+          </footer>
+
         </div>
       );
     }
+
+    // Render App into DOM
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
