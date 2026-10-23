@@ -19,3 +19,6 @@ Cancelled tasks are excluded from project progress; archived projects are hidden
 
 ## Known limitations (not done yet)
 No UI yet for comments, attachments, DMs or search (the API endpoints exist and are tested). Still missing: email sending (tokens are logged), Alembic migrations, Google OAuth, labels/subtasks, calendar view, drag-and-drop, Redis, LLM provider for AI, workspace switcher, Playwright/Vitest tests, S3 storage. CI runs backend tests only. The frontend loads React/Tailwind from CDNs.
+
+## Email (invitations and password reset)
+Copy `backend/.env.example` to `backend/.env` and fill in the SMTP settings (the Gmail example uses an App Password). Restart the server. If email is not configured, the app says so and gives the admin an invite link to send manually. Invited people open the link, sign in or create an account with the invited email address, and are added to the workspace.

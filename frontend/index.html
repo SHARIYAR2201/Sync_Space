@@ -63,6 +63,10 @@
     let session = null;
     try { session = JSON.parse(localStorage.getItem("ss_session") || "null"); } catch (e) { session = null; }
     function saveSession(s) { session = s; try { s ? localStorage.setItem("ss_session", JSON.stringify(s)) : localStorage.removeItem("ss_session"); } catch (e) {} }
+    (function () {  // invite links look like  /#/invite/<token>
+      const m = location.hash.match(/^#\/invite\/([\w-]+)/);
+      if (m) { try { sessionStorage.setItem("ss_invite", m[1]); } catch (e) {} history.replaceState(null, "", location.pathname + "#/overview"); }
+    })();
     let refreshing = null;
     async function doRefresh() {
       if (!session) return false;
@@ -228,7 +232,21 @@
         api("/auth/me").then(me => { setUser(me); setProfileName(me.name); }).catch(() => saveSession(null)).finally(() => setBooting(false));
         const out = () => signOut(true); window.addEventListener("ss-signout", out); return () => window.removeEventListener("ss-signout", out);
       }, []);
-      useEffect(() => { if (user) loadAll(); }, [user && user.id]);
+      useEffect(() => {
+        if (!user) return;
+        (async () => {
+          let tok = null; try { tok = sessionStorage.getItem("ss_invite"); } catch (e) {}
+          if (tok) {
+            try { sessionStorage.removeItem("ss_invite"); } catch (e) {}
+            try {
+              await api("/invitations/accept", { method: "POST", body: { token: tok } });
+              const me = await api("/auth/me"); setUser(me); setChannels({}); setActiveChannel("");
+              addToast(`Invitation accepted. Welcome to ${me.workspace}!`);
+            } catch (e) { fail(e); }
+          }
+          loadAll();
+        })();
+      }, [user && user.id]);
       useEffect(() => { const h = () => setCurrentView(parseHash()); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
 
       useEffect(() => {
@@ -290,7 +308,12 @@
         try {
           const d = await api("/invitations", { method: "POST", body: { email: inviteEmail.trim(), role: inviteRole } });
           setMembers(await api("/members")); setInviteEmail(""); setIsInviteModalOpen(false);
-          addToast(d.message + " (Email delivery needs a provider; the token is in the server log.)");
+          if (d.email_sent) addToast(d.message);
+          else {
+            addToast(`${d.message} ${d.email_error || ""}`, "error");
+            try { navigator.clipboard.writeText(d.invite_link); } catch (e) {}
+            window.prompt("The email was not sent. Copy this invite link and send it to them yourself (it is also copied to your clipboard):", d.invite_link);
+          }
         } catch (err) { fail(err); }
       };
       const removeMember = async (m) => {

@@ -36,11 +36,11 @@ def test_tasks_dashboard_and_workspace_isolation():
 def test_roles_and_invitations():
     _, ho = reg("boss@x.io"); _, hm = reg("mem@x.io", "Mem")
     inv = c.post("/api/v1/invitations", json={"email": "mem@x.io", "role": "Member"}, headers=ho).json()
-    assert c.post("/api/v1/invitations/accept", json={"token": inv["dev_token"]}, headers=hm).status_code == 200
-    assert c.post("/api/v1/invitations/accept", json={"token": inv["dev_token"]}, headers=hm).status_code == 400  # single use
+    assert c.post("/api/v1/invitations/accept", json={"token": inv["invite_link"].split("/invite/")[1]}, headers=hm).status_code == 200
+    assert c.post("/api/v1/invitations/accept", json={"token": inv["invite_link"].split("/invite/")[1]}, headers=hm).status_code == 400  # single use
     # mem's first workspace is still their own (Owner); a pure Member is checked below via a second invitee
     _, hz = reg("z@x.io"); inv2 = c.post("/api/v1/invitations", json={"email": "z@x.io", "role": "Member"}, headers=ho).json()
-    assert c.post("/api/v1/invitations/accept", json={"token": inv2["dev_token"]}, headers=hz).status_code == 200
+    assert c.post("/api/v1/invitations/accept", json={"token": inv2["invite_link"].split("/invite/")[1]}, headers=hz).status_code == 200
 
 def test_chat_persist_and_ws_auth():
     d, h = reg("chat@x.io")
@@ -74,3 +74,23 @@ def test_comments_files_dm_search():
     assert [x["name"] for x in c.get("/api/v1/search?q=searchable", headers=ha).json()["projects"]] == ["Searchable Project"]
     assert c.get("/api/v1/search?q=searchable", headers=hb).json()["projects"] == []
     assert c.post("/api/v1/dm/9999", json={"body": "x"}, headers=ha).status_code == 404
+
+
+def test_invite_email_sent_and_failure_reported(monkeypatch):
+    import app.core as core, app.main as mn
+    _, h = reg("mailer@x.io")
+    r = c.post("/api/v1/invitations", json={"email": "friend@x.io", "role": "Member"}, headers=h).json()
+    assert r["email_sent"] is False and "not configured" in r["email_error"] and "/#/invite/" in r["invite_link"]
+    sent = {}
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=0): sent["host"] = host
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def starttls(self): sent["tls"] = True
+        def login(self, u, p): sent["login"] = u
+        def send_message(self, msg): sent["to"] = msg["To"]; sent["body"] = msg.get_content()
+    monkeypatch.setattr(core, "SMTP_HOST", "smtp.test"); monkeypatch.setattr(core, "SMTP_FROM", "me@test")
+    monkeypatch.setattr(core.smtplib, "SMTP", FakeSMTP)
+    r = c.post("/api/v1/invitations", json={"email": "friend@x.io", "role": "Member"}, headers=h).json()
+    assert r["email_sent"] is True and sent["to"] == "friend@x.io" and r["invite_link"] in sent["body"] and sent["tls"]
+    assert len([m for m in c.get("/api/v1/members", headers=h).json() if m["status"] == "Pending"]) == 1  # re-invite replaced the old one

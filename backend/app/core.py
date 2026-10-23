@@ -1,11 +1,25 @@
 """Config, DB session, models and security helpers."""
-import os, hashlib, secrets, hmac
+import os, hashlib, secrets, hmac, logging, smtplib
+from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 import jwt
 from sqlalchemy import create_engine, String, ForeignKey, DateTime, Text, Boolean, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, relationship
 
+def _load_dotenv():  # tiny .env reader (no extra dependency); real environment variables win
+    path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1); os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+_load_dotenv()
+log = logging.getLogger("syncspace")
 ENV = os.getenv("APP_ENV", "development")
+APP_URL = os.getenv("APP_URL", "http://127.0.0.1:8000").rstrip("/")
+SMTP_HOST = os.getenv("SMTP_HOST", ""); SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", ""); SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "") or SMTP_USER
 SECRET = os.getenv("JWT_SECRET_KEY", "dev-only-secret-change-me-32-bytes-min")
 if ENV == "production" and SECRET.startswith("dev-only"):
     raise RuntimeError("JWT_SECRET_KEY must be set in production")
@@ -145,3 +159,20 @@ def read_access(tok: str) -> int:
     d = jwt.decode(tok, SECRET, algorithms=["HS256"])
     if d.get("typ") != "access": raise jwt.InvalidTokenError()
     return int(d["sub"])
+
+
+def send_email(to: str, subject: str, body: str):
+    """Returns (sent, error). Never claims success unless the SMTP server accepted the message."""
+    if not SMTP_HOST:
+        return False, "Email is not configured on the server (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)."
+    try:
+        msg = EmailMessage(); msg["From"] = SMTP_FROM; msg["To"] = to; msg["Subject"] = subject; msg.set_content(body)
+        srv = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) if SMTP_PORT == 465 else smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+        with srv:
+            if SMTP_PORT != 465: srv.starttls()
+            if SMTP_USER: srv.login(SMTP_USER, SMTP_PASSWORD)
+            srv.send_message(msg)
+        return True, None
+    except Exception as e:
+        log.warning("Email send failed: %s", type(e).__name__)
+        return False, f"Could not send the email ({type(e).__name__}). Check the SMTP settings."

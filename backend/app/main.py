@@ -41,7 +41,7 @@ def current_user(request: Request, s: Session = Depends(db)) -> User:
     return u
 
 def membership(u: User = Depends(current_user), s: Session = Depends(db)) -> Membership:
-    m = s.scalars(select(Membership).where(Membership.user_id == u.id).order_by(Membership.id)).first()
+    m = s.scalars(select(Membership).where(Membership.user_id == u.id).order_by(Membership.id.desc())).first()  # active workspace = most recently joined
     if not m: raise HTTPException(403, "You are not a member of any workspace.")
     return m
 
@@ -130,8 +130,10 @@ def forgot(b: Forgot, s: Session = Depends(db)):
         raw = secrets.token_urlsafe(32)
         s.add(ResetToken(user_id=u.id, token_hash=sha(raw), expires_at=now() + timedelta(hours=1))); s.commit()
         # No email provider configured: log for development instead of claiming an email was sent.
-        log.warning("DEV password reset token for %s: %s", u.email, raw)
-    return {"message": "If that email is registered, reset instructions have been generated."}  # generic: no enumeration
+        sent, _ = send_email(u.email, "Reset your SyncSpace password",
+            f"Use this reset token within 1 hour:\n\n{raw}\n\nOpen SyncSpace > Forgot password > enter the token. If you didn't ask for this, ignore this email.")
+        if not sent: log.warning("DEV password reset token for %s: %s", u.email, raw)
+    return {"message": "If that email is registered, reset instructions have been sent."}  # generic: no enumeration
 
 @app.post("/api/v1/auth/reset", dependencies=[Depends(limit)])
 def reset(b: Reset, s: Session = Depends(db)):
@@ -159,14 +161,22 @@ def members(m: Membership = Depends(membership), s: Session = Depends(db)):
            [{"id": -i.id, "name": i.email.split("@")[0], "email": i.email, "role": i.role, "status": "Pending"} for i in inv]
 
 @app.post("/api/v1/invitations", status_code=201)
-def invite(b: InviteIn, m: Membership = Depends(membership), s: Session = Depends(db)):
+def invite(b: InviteIn, u: User = Depends(current_user), m: Membership = Depends(membership), s: Session = Depends(db)):
     need(m, "Owner", "Admin")
+    email = b.email.lower()
+    if s.scalars(select(Membership).join(User, User.id == Membership.user_id).where(Membership.workspace_id == m.workspace_id, User.email == email)).first():
+        raise HTTPException(409, "That person is already a member of this workspace.")
+    for old in s.scalars(select(Invitation).where(Invitation.workspace_id == m.workspace_id, Invitation.email == email, Invitation.used == False)):  # noqa
+        old.used = True  # re-inviting replaces the earlier pending invitation
     raw = secrets.token_urlsafe(32)
-    s.add(Invitation(workspace_id=m.workspace_id, email=b.email.lower(), role=b.role, token_hash=sha(raw),
-                     expires_at=now() + timedelta(days=7)))
-    log_activity(s, m.workspace_id, f"Invitation sent to {b.email}"); s.commit()
-    log.warning("DEV invitation token for %s: %s", b.email, raw)  # replace with email provider
-    return {"message": f"Invitation created for {b.email}.", "dev_token": raw if ENV != "production" else None}
+    s.add(Invitation(workspace_id=m.workspace_id, email=email, role=b.role, token_hash=sha(raw), expires_at=now() + timedelta(days=7)))
+    ws = s.get(Workspace, m.workspace_id); log_activity(s, m.workspace_id, f"Invitation sent to {b.email}"); s.commit()
+    link = f"{APP_URL}/#/invite/{raw}"
+    sent, err = send_email(email, f"{u.name} invited you to {ws.name} on SyncSpace",
+        f"Hi,\n\n{u.name} invited you to join \"{ws.name}\" on SyncSpace as {b.role}.\n\nOpen this link to accept (valid 7 days). "
+        f"Create an account with this same email address if you don't have one yet:\n{link}\n\nIf you weren't expecting this, ignore this email.")
+    return {"message": f"Invitation emailed to {b.email}." if sent else "Invitation created, but the email was not sent.",
+            "email_sent": sent, "email_error": err, "invite_link": link}
 
 @app.post("/api/v1/invitations/accept")
 def accept(b: AcceptIn, u: User = Depends(current_user), s: Session = Depends(db)):
