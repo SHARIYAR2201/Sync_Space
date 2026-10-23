@@ -12,6 +12,8 @@ if ENV == "production" and SECRET.startswith("dev-only"):
 ACCESS_MIN = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "14"))
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///./syncspace.db")
+for _p in ("postgres://", "postgresql://"):
+    if DB_URL.startswith(_p): DB_URL = "postgresql+psycopg://" + DB_URL[len(_p):]
 engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {})
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
