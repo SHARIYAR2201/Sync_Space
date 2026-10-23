@@ -5,14 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SyncSpace | Full-Stack Team Collaboration Platform</title>
   <meta name="description" content="SyncSpace combines project management, real-time messaging, productivity analytics, and AI assistance in one unified workspace." />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <meta name="theme-color" content="#0f172a" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
+  <meta name="theme-color" content="#e7e3db" />
   <meta property="og:title" content="SyncSpace | Team Collaboration Platform" />
   <meta property="og:description" content="Projects, tasks, team chat and analytics in one workspace." />
   
   <!-- Tailwind CSS CDN -->
   <script src="/config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    /* THEME: ice silver (#e7e3db) / deep aubergine (#2b1033) / marigold (#f2a01b).
+       Only colours are remapped here; no layout or logic was changed.
+       "slate" is inverted into a light silver scale, "white" becomes aubergine ink, and blue/purple/amber become marigold. */
+    tailwind.config = { theme: { extend: { colors: {
+      white: "#2b1033",
+      slate: { 100: "#2a1431", 200: "#35203d", 300: "#46304e", 400: "#5f4a67", 500: "#7b6a80", 600: "#9c8f9e", 700: "#c7bfb3", 800: "#d9d3c9", 900: "#f3f0ea", 950: "#e7e3db" },
+      blue: { 300: "#9a5a00", 400: "#b36b00", 500: "#f7b13d", 600: "#f2a01b", 700: "#d98a0b", 900: "#f6dca8" },
+      purple: { 400: "#5a2d63", 500: "#e9b350", 600: "#e0a128" },
+      amber: { 300: "#8a5300", 400: "#9a5d00", 500: "#e6a117", 600: "#d98a0b" },
+      emerald: { 300: "#6b3a75", 400: "#5a2d63", 500: "#9d8fa3", 600: "#b3a6b8" },
+      rose: { 300: "#7a3f00", 400: "#a35100", 500: "#e08a00" }
+    } } } };
+  </script>
   <!-- React & Babel CDNs -->
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
@@ -37,14 +51,14 @@
       height: 6px;
     }
     ::-webkit-scrollbar-track {
-      background: #0f172a;
+      background: #e7e3db;
     }
     ::-webkit-scrollbar-thumb {
-      background: #334155;
+      background: #bfb7ab;
       border-radius: 3px;
     }
     ::-webkit-scrollbar-thumb:hover {
-      background: #475569;
+      background: #a69c93;
     }
   </style>
 </head>
@@ -589,10 +603,10 @@
                     <div className="flex justify-between items-center mb-2"><h3 className="text-sm font-semibold text-white">Tasks statistics</h3><button onClick={() => navigateTo("analytics")} className="bg-white text-slate-900 text-xs font-semibold rounded-full px-4 py-1.5">Full chart</button></div>
                     {weekly.length === 0 ? <p className="text-sm text-slate-500 py-10 text-center">Loading…</p> :
                       <svg viewBox="0 0 300 140" className="w-full h-auto" role="img" aria-label={`Tasks completed per week; best week ${best.week} with ${best.count}`}>
-                        {[20, 50, 80, 110].map(y => <line key={y} x1="20" x2="280" y1={y} y2={y} stroke="#1e293b" strokeWidth="1" />)}
-                        <path d={path} fill="none" stroke="#a78bfa" strokeWidth="2.5" strokeLinecap="round" />
-                        {pts.map((q, i) => <circle key={i} cx={q[0]} cy={q[1]} r="3" fill="#a78bfa" />)}
-                        {weekly.map((w, i) => <text key={i} x={pts[i][0]} y="130" textAnchor="middle" fontSize="8" fill="#64748b">{w.week}</text>)}
+                        {[20, 50, 80, 110].map(y => <line key={y} x1="20" x2="280" y1={y} y2={y} stroke="#d9d3c9" strokeWidth="1" />)}
+                        <path d={path} fill="none" stroke="#2b1033" strokeWidth="2.5" strokeLinecap="round" />
+                        {pts.map((q, i) => <circle key={i} cx={q[0]} cy={q[1]} r="3" fill="#2b1033" />)}
+                        {weekly.map((w, i) => <text key={i} x={pts[i][0]} y="130" textAnchor="middle" fontSize="8" fill="#7b6a80">{w.week}</text>)}
                       </svg>}
                     <div className="text-xs text-slate-400 mt-1">Best week: <span className="text-white font-semibold">{best.week}</span> · {best.count} task(s) done</div>
                     <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3"><span className="text-sm text-white">Tasks control <span className="ml-2 text-[11px] bg-slate-800 rounded-full px-2 py-0.5">{stats ? String(stats.overdue).padStart(2, "0") : "…"} overdue</span></span></div>
