@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SyncSpace | Full-Stack Team Collaboration Platform</title>
   <meta name="description" content="SyncSpace combines project management, real-time messaging, productivity analytics, and AI assistance in one unified workspace." />
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2L2 7l10 5 10-5-10-5z'/><path d='M2 17l10 5 10-5'/><path d='M2 12l10 5 10-5'/></svg>" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta property="og:title" content="SyncSpace | Team Collaboration Platform" />
+  <meta property="og:description" content="Projects, tasks, team chat and analytics in one workspace." />
   
   <!-- Tailwind CSS CDN -->
+  <script src="/config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- React & Babel CDNs -->
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
@@ -54,6 +58,8 @@
 
 
     const API = "/api/v1";
+    // On Netlify, config.js sets SYNCSPACE_BACKEND to the backend URL so WebSockets connect directly (Netlify cannot proxy them).
+    const WS_BASE = ((window.SYNCSPACE_BACKEND || location.origin)).replace(/^http/, "ws");
     let session = null;
     try { session = JSON.parse(localStorage.getItem("ss_session") || "null"); } catch (e) { session = null; }
     function saveSession(s) { session = s; try { s ? localStorage.setItem("ss_session", JSON.stringify(s)) : localStorage.removeItem("ss_session"); } catch (e) {} }
@@ -238,12 +244,13 @@
         let ws, closed = false, timer;
         api(`/channels/${channelId}/messages`).then(rows => setChannels(prev => ({ ...prev, [activeChannel]: rows.map(decorate) }))).catch(fail);
         const connect = () => {
-          ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/v1/ws?token=${session.access_token}&channel_id=${channelId}`);
+          ws = new WebSocket(`${WS_BASE}/api/v1/ws?token=${session.access_token}&channel_id=${channelId}`);
           ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === "message.created") appendMessage(activeChannel, m.data); };
           ws.onclose = () => { if (!closed) timer = setTimeout(async () => { await api("/auth/me").catch(() => {}); if (session) connect(); }, 3000); };
         };
         connect();
-        return () => { closed = true; clearTimeout(timer); ws && ws.close(); };
+        const poll = setInterval(() => api(`/channels/${channelId}/messages`).then(rows => setChannels(prev => ({ ...prev, [activeChannel]: rows.map(decorate) }))).catch(() => {}), 5000);
+        return () => { closed = true; clearTimeout(timer); clearInterval(poll); ws && ws.close(); };
       }, [channelId, user && user.id]);
       const appendMessage = (ch, m) => setChannels(prev => { const cur = prev[ch] || []; return cur.some(x => x.id === m.id) ? prev : { ...prev, [ch]: [...cur, decorate(m)] }; });
 
